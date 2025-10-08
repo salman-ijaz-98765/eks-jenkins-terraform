@@ -28,7 +28,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
+                git branch: 'main', url: 'https://github.com/salman-ijaz-98765/eks-jenkins-terraform.git'
             }
         }
         
