@@ -1,84 +1,22 @@
 pipeline {
     agent any
-    
-    parameters {
-        string(name: 'AWS_REGION', defaultValue: 'us-west-2', description: 'AWS region for EKS cluster')
-        string(name: 'CLUSTER_NAME', defaultValue: 'jenkins-eks-cluster', description: 'jenkins-eks-cluster')
-        choice(name: 'ENVIRONMENT', choices: 'dev', description: 'Deployment environment')
-        string(name: 'TERRAFORM_VERSION', defaultValue: '1.5.7', description: 'Terraform version')
-    }
-    
+
     environment {
-        AWS_ACCESS_KEY_ID = Credentials('AWS_ACCESS_KEY_ID')
-        aws_secret_access_key = Credentials('AWS_SECRET_ACCESS_KEY')
-        // AWS_REGION = "${params.AWS_REGION}"
-        // CLUSTER_NAME = "${params.CLUSTER_NAME}"
-        // ENVIRONMENT = "${params.ENVIRONMENT}"
-        // TERRAFORM_VERSION = "${params.TERRAFORM_VERSION}"
-        // KUBECTL_VERSION = '1.28.0'
-        // S3_BUCKET = "eks-tf-state-${ENVIRONMENT}-salman"
+        AWS_ACCESS_KEY_ID     = credentials('AWS_ACCESS_KEY_ID')
+        AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
     }
-    
-    options {
-        timeout(time: 30, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-        disableConcurrentBuilds()
-    }
-    
+
     stages {
         stage('Checkout') {
             steps {
                 git branch: 'main', url: 'https://github.com/salman-ijaz-98765/eks-jenkins-terraform.git'
             }
         }
-        
-        stage('Setup AWS Credentials') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                    bat """
-                    aws configure set aws_access_key_id %AWS_ACCESS_KEY_ID%
-                    aws configure set aws_secret_access_key %AWS_SECRET_ACCESS_KEY%
-                    aws configure set region %AWS_REGION%
-                    aws configure set output json
-                    aws sts get-caller-identity
-                    """
-                }
-            }
-        }
-
-        stage('Setup Tools') {
-            steps {
-                script {
-                    bat """
-                    echo Installing Terraform %TERRAFORM_VERSION%...
-                    powershell -Command "Invoke-WebRequest -Uri 'https://releases.hashicorp.com/terraform/%TERRAFORM_VERSION%/terraform_%TERRAFORM_VERSION%_windows_amd64.zip' -OutFile 'terraform.zip'"
-                    powershell -Command "Expand-Archive -Path terraform.zip -DestinationPath . -Force"
-                    move terraform.exe C:\\Windows\\System32\\
-                    terraform --version
-
-                    echo Installing kubectl %KUBECTL_VERSION%...
-                    powershell -Command "Invoke-WebRequest -Uri 'https://dl.k8s.io/release/v%KUBECTL_VERSION%/bin/windows/amd64/kubectl.exe' -OutFile 'kubectl.exe'"
-                    move kubectl.exe C:\\Windows\\System32\\
-                    kubectl version --client
-                    """
-                }
-            }
-        }
 
         stage('Terraform Init') {
             steps {
                 dir('terraform') {
-                    bat """
-                    terraform init -reconfigure -backend-config="bucket=%S3_BUCKET%" -backend-config="key=eks-cluster/terraform.tfstate" -backend-config="region=%AWS_REGION%" -backend-config="encrypt=true"
-                    """
-                }
-            }
-        }
-
-        stage('Terraform Validate') {
-            steps {
-                dir('terraform') {
-                    bat 'terraform validate'
+                    sh 'terraform init -input=false'
                 }
             }
         }
@@ -86,44 +24,32 @@ pipeline {
         stage('Terraform Plan') {
             steps {
                 dir('terraform') {
-                    bat "terraform plan -var='aws_region=${AWS_REGION}' -var='cluster_name=${CLUSTER_NAME}' -var='environment=${ENVIRONMENT}' -out=tfplan"
+                    sh 'terraform plan -out=tfplan -input=false'
                 }
             }
         }
 
         stage('Terraform Apply') {
             steps {
-                input message: 'Approve Terraform Apply?'
                 dir('terraform') {
-                    bat 'terraform apply -auto-approve tfplan'
+                    sh 'terraform apply -auto-approve tfplan'
                 }
             }
         }
 
-        stage('Configure Kubectl') {
-            steps {
-                bat "aws eks update-kubeconfig --region %AWS_REGION% --name %CLUSTER_NAME%"
-            }
-        }
-
-        stage('Verify Cluster') {
-            steps {
-                bat "kubectl get nodes"
-            }
-        }
+        // stage('Terraform Destroy') {
+        //     when {
+        //         expression { return params.DESTROY == true }
+        //     }
+        //     steps {
+        //         dir('terraform') {
+        //             sh 'terraform destroy -auto-approve'
+        //         }
+        //     }
+        // }
     }
 
-    post {
-        always {
-            cleanWs()
-        }
-        success {
-            echo "✅ EKS cluster deployed successfully!"
-        }
-        failure {
-            echo "❌ Pipeline failed — check logs."
-        }
-    }
+    // parameters {
+    //     booleanParam(name: 'DESTROY', defaultValue: false, description: 'Check to destroy infrastructure')
+    // }
 }
-
-
